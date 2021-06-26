@@ -1,0 +1,184 @@
+---
+title: "Demand PS 2"
+author: "Doron Zamir"
+date: "6/5/2021"
+output:
+  html_document: 
+    html_preview: yes
+    toc: yes
+    toc_float: yes
+    code_folding: show
+    keep_md: yes
+    df_print: tibble
+---
+
+# 1. Specifying a Model
+
+I will be estimating demand elasticities in the European Car Market, following *Goldberg and Verboven (2001)* and using the same database, and using the methods introduced by *Berry (1994)*.
+
+The underlying utility function in the base of the model is this:
+
+$$
+u_{jti} = \delta_{jt} +\mu_{ijt} +\xi_{jt} 
+$$
+
+That is, the utility of the consumer $i$ from consuming one unit of car $j$ in market $t$ contains of three components: $\delta_{jt}$ is a common to all consumers,$\mu_{jti}$ is set on the individual level, and $\xi_{jt}$ is a vector of unobserved(to the researcher) characteristics.
+
+Since we are interested in the common / average component, write $\delta_{jt}$ explicitly:
+
+$$
+\delta_{jt} = \beta x_{jt} + \alpha p_{jt}
+$$
+
+and the individual level $\mu_{ijt}$ :
+
+$$
+\mu_{ijt} = \sum_{l= 1}^k{\sigma_lv_{il}x_{jl}} +\sigma_pv_{ip}p_j +\epsilon_{ij}
+$$
+
+I defined the markets $t =1…..T$ to be the interaction between state and year, that is $t \in (state) X (year)$ . The period segmentation is due to the fact that car models differs by the year of production that is, car model $j$ is not the same in time $t$ and in time $t'$; It is a different product, and consumers will assign different utility from it. The state level segmentation is due to the fact that in the time of the sample, the different countries functions as different markets, with different preferences upon attributes of the car, different macro conditions, different distribution lines for the producers, etc.
+
+Suppressing the market index for now on, the car observable characteristics vector $x_j$, used as utility shiftier, is set to be the following:
+
+-   brand and model fixed effects for capturing flavors and brand loyalty
+
+-   whether a car is domestically produced or not
+
+-   physical characteristics of the car: weight, places, door, length, width etc.
+
+-   technical characteristics : horsepower, fuel efficiency (in three different speeds), acceleration, max speed etc.
+
+I did not use class dummy, as that the physical characteristics, and the interactions between the later and brand and model fixed effects, explains much of the utility might be explained by class.
+
+Following to what we did class, estimate the following equation:
+
+$$
+ln(s_{jt}) - ln(s_{0t})  = \beta x_{jt} + \alpha p_{jt}
+$$
+
+where $s_{jt}$ is the market share of product $j$ in market $t$ :
+
+$$
+s_{jt} \equiv \frac{q_{jt}}{M_t} 
+$$
+
+$M_t$ is the market size, here taken to be the population of the country in the specific year, and the outside product $j = 0$ is set to be "not buying a new car", that is we don't know what did the people consumed the outside product did: they might stayed with their old car, bought a second - hand car or stick with public transportation.
+
+# 2. Estimating the model
+
+## Getting thing ready
+
+### Loading Packages
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	eval = TRUE,
+	echo = TRUE,
+	fig.ext = ".svg",
+	message = FALSE,
+	warning = FALSE,
+	cache = FALSE,
+	dev = "svglite"
+)
+```
+
+```{r load_pack, class.source = "fold-hide" }
+if (!require("pacman")) install.packages("pacman")
+pacman::p_load(
+  tidyverse,
+  broom,
+  AER,
+  miceadds,
+  estimatr
+)
+```
+
+### Loading the dataset
+
+I used `read.dta` from `foreign` package to read the stata file, including labels.
+
+```{r}
+df_raw <- foreign::read.dta(
+  "Data/cars.dta"
+)
+
+head(df_raw)
+```
+
+### Preparing the data
+
+First, drop unneeded attributes:
+
+```{r}
+df <- df_raw %>% 
+  select(-c(
+    co,
+    brd,
+    cla,
+    pr,
+    princ,
+    exppr,
+  ))
+```
+
+Create market identification, where, as mentioned, markets are set to be a combination of year and country:
+
+```{r}
+df <- df %>% mutate(
+  mkt = as_factor(str_c(ma,ye, sep = "_"))
+)
+
+df %>% select(mkt) %>% sample_n(8)
+```
+
+Calculate market shares, creating variable name `s_j` to be the market share of product `j`.
+
+```{r}
+df <- df %>% mutate(
+  s_j = qu / pop
+)
+```
+
+adding the outside product market share `s_0`, calculated as $s_{j0} \equiv 1- \sum_{j = 1}^J (s_{jt})$
+
+```{r}
+df <- df %>% 
+  group_by(mkt) %>% 
+  mutate(
+    s_0 = 1 - sum (s_j)
+  ) %>% ungroup()
+```
+
+Now, creating our dependent variable for the regression
+
+$$
+\Delta ln(s_j) \equiv \ln(s_j) - ln(s_0) 
+$$
+
+call it `dln_s`:
+
+```{r}
+df <- df %>% 
+  mutate(dln_s = log(s_j) - log(s_0))
+```
+
+showing the main variables of the regression (without $x_j$ ), i.e $(\Delta ln(s_{tj}), p_{jt})$
+
+```{r}
+df %>% select(
+  mkt,
+  brand,
+  model,
+   dln_s,
+  eurpr
+)
+
+```
+
+## Estimations
+
+### stimulate consumers
+
+```{r}
+
+```

@@ -1,0 +1,656 @@
+---
+title: "Demand PS 1"
+author: "Doron Zamir"
+date: "6/5/2021"
+output:
+  html_document: 
+    html_preview: yes
+    toc: yes
+    toc_float: yes
+    code_folding: show
+    keep_md: yes
+    df_print: tibble
+---
+
+# Part 1 - A simple Logit Model
+
+## 1. Specifying a Model
+
+I will be estimating demand elasticities in the European Car Market, following *Goldberg and Verboven (2001)* and using the same database, and using the methods introduced by *Berry (1994)*.
+
+The underlying utility function in the base of the model is this:
+
+$$
+u_{jti} = \delta_{jt} +\mu_{ijt} 
+$$
+
+That is, the utility of the consumer $i$ from consuming one unit of car $j$ in market $t$ contains of three components: $\delta_{jt}$ is a common to all consumers,$\mu_{jti}$ is set on the individual level.
+
+Since we are interested in the common / average component, write $\delta_{jt}$ explicitly:
+
+$$
+\delta_{jt} = \beta x_{jt} + \alpha p_{jt}  +\xi_{jt}
+$$
+
+Where $\xi_{jt}$ is a vector of unobserved(to the researcher) characteristics.
+
+And the individual level $\mu_{ijt}$ :
+
+$$
+\mu_{ijt} = \sum_{l= 1}^k{\sigma_lv_{il}x_{jl}} +\sigma_pv_{ip}p_j +\epsilon_{ij}
+$$
+
+I defined the markets $t =1…..T$ to be the interaction between state and year, that is $t \in stateXyear$. The period segmentation is due to the fact that car models differs by the year of production that is, car model $j$ is not the same in time $t$ and in time $t'$; It is a different product, and consumers will assign different utility from it. The state level segmentation is due to the fact that in the time of the sample, the different countries functions as different markets, with different preferences upon attributes of the car, different macro conditions, different distribution lines for the producers, etc.
+
+Suppressing the market index for now on, the car observable characteristics vector $x_j$, used as utility shifter, is set to be the following:
+
+-   brand and model fixed effects for capturing flavors and brand loyalty
+
+-   whether a car is domestically produced or not
+
+-   physical characteristics of the car: weight, places, door, length, width etc.
+
+-   technical characteristics : horsepower, fuel efficiency (in three different speeds), acceleration, max speed etc.
+
+I did not use class dummy, as the the physical characteristics, and the interactions between the later and brand and model fixed effects, explains much of the utility might be explained by class.
+
+Following to what we did class, estimate the following equation:
+
+$$
+ln(s_{jt}) - ln(s_{0t})  = \beta x_{jt} + \alpha p_{jt}
+$$
+
+where $s_{jt}$ is the market share of product $j$ in market $t$ :
+
+$$
+s_{jt} \equiv \frac{q_{jt}}{M_t} 
+$$
+
+$M_t$ is the market size, here taken to be the population of the country in the specific year, and the outside product $j = 0$ is set to be "not buying a new car", that is we don't know what did the people consumed the outside product did: they might stayed with their old car, bought a second - hand car or stick with public transportation.
+
+### 1.1 Getting thing ready
+
+#### Loading Packages
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	eval = TRUE,
+	echo = TRUE,
+	fig.ext = ".svg",
+	message = FALSE,
+	warning = FALSE,
+	cache = FALSE,
+	dev = "svglite"
+)
+```
+
+```{r load_pack, class.source = "fold-hide" }
+if (!require("pacman")) install.packages("pacman")
+pacman::p_load(
+  tidyverse,
+  broom,
+  AER,
+  miceadds,
+  estimatr
+)
+```
+
+#### Loading the dataset
+
+I used `read.dta` from `foreign` package to read the stata file, including labels.
+
+```{r}
+df_raw <- foreign::read.dta(
+  "Data/cars.dta"
+)
+
+head(df_raw)
+```
+
+#### Preparing the data
+
+First, drop unneeded attributes:
+
+```{r}
+df <- df_raw %>% 
+  select(-c(
+    co,
+    brd,
+    cla,
+    pr,
+    princ,
+    exppr,
+  ))
+```
+
+Create market identification, where, as mentioned, markets are set to be a combination of year and country:
+
+```{r}
+df <- df %>% mutate(
+  mkt = as_factor(str_c(ma,ye, sep = "_")) 
+)
+
+df %>% select(mkt) %>% sample_n(8) #showing sample of mkt attribute
+```
+
+Calculate market shares, creating variable name `s_j` to be the market share of product `j`.
+
+```{r}
+df <- df %>% mutate(
+  s_j = qu / pop
+)
+```
+
+adding the outside product market share `s_0`, calculated as $s_{j0} \equiv 1- \sum_{j = 1}^J (s_{jt})$
+
+```{r}
+df <- df %>% 
+  group_by(mkt) %>% 
+  mutate(
+    s_0 = 1 - sum (s_j)
+  ) %>% ungroup()
+```
+
+Now, creating our dependent variable for the regression
+
+$$
+\Delta ln(s_j) \equiv \ln(s_j) - ln(s_0) 
+$$
+
+call it `dln_s`:
+
+```{r}
+df <- df %>% 
+  mutate(dln_s = log(s_j) - log(s_0))
+```
+
+showing the main variables of the regression (without $x_j$ ), i.e $(\Delta ln(s_{tj}), p_{jt})$
+
+```{r}
+df %>% select(
+  mkt,
+  brand,
+  model,
+   dln_s,
+  eurpr
+)
+```
+
+## 2. OLS Estimation
+
+estimating our model equation using OLS:
+
+$$
+\Delta ln(s_j) = \beta x_{jt} + \alpha p_{jt}
+$$
+
+Where $\alpha$ is our parameter of interest, and $p_{jt}$ is given in common currency, as `eurpr`.
+
+```{r}
+ols_model <- lm_robust(
+  dln_s ~ eurpr + cy + home + hp + we + as.factor(pl) + as.factor(do) + he + li1 + li2 +li3 +li+sp + ac ,
+  data = df,
+  se_type = "stata",
+  clusters = ma,
+  fixed_effects = ~  brand + model
+)
+
+tidy(ols_model$coefficients)
+```
+
+```{r}
+alpha_ols  <-  ols_model$coefficients["eurpr"]
+alpha_ols
+```
+
+## 3. IV Estimation
+
+### 3.1 Choosing IV
+
+The OLS estimator is inefficient, due to simultaneity problem.
+
+I will use an IV suggested by *Goldberg and Verboven (2001)*: the exchange rate between origin and destination, this is stored in the variable `xexr`.
+
+The exchange rate differences affects pricing only throw the supply curve, and are suggested to be valid instrument.
+
+Another instrument that I will use, is the "producer price index" (`avppr)` of exporter country, affecting costs of the producer, but not the consumer.
+
+### 3.2 TSLS estimation
+
+```{r}
+iv_model <- iv_robust(
+  dln_s ~ eurpr + cy + home + hp + we + as.factor(pl) + as.factor(do) + he + li1 + li2 +li3 +li+sp + ac | . -eurpr + xexr ,
+  data = df,
+  se_type = "stata", #this is robust se correction
+  clusters = ma,  #clustering by state
+  fixed_effects = ~  brand + model #using brand + model FE
+)
+iv_model %>% tidy
+```
+
+\
+
+```{r}
+alpha_iv <- iv_model$coefficients["eurpr"]
+alpha_iv
+```
+
+### 3.3 Discussion
+
+The 2SLS estimation for $\alpha$ is lower (i.e more negative) than the OLS one. This is in line with the intuitive that the OLS estimator is biased closer to zero due to simultaneity of the price variable.
+
+## 3. Estimating price elasticities:
+
+Using $\alpha^{IV}$ we can estimate the elasticities.
+
+let $H$ be a price elasticities matrix, where $\eta_{jk}$ set to be the price elasticity between products $j,k$, That is:
+
+$$
+\eta_{j_k} \equiv \frac{\partial s_j}{\partial p_k}\cdot \frac{p_j}{s_k} = \begin{cases}\alpha p_j(1-s_j) & k = j \\ -\alpha p_k s_k & k \ne j \end{cases}
+$$
+
+I will select market `UK_70:`
+
+```{r}
+UK_70 <- df %>% 
+  filter(mkt == "UK_70")
+
+J = nrow(UK_70)
+J
+```
+
+    ## [1] 40
+
+calculate elasticities:
+
+```{r}
+ETA <- matrix(0,J,J)
+
+for (j in 1:J) {
+  for (k in 1:J) {
+    if (j == k){
+      ETA[j,k] <-as.numeric(alpha_iv  * UK_70[k,"eurpr"]* (1- UK_70[k,"s_j"]))
+      }
+    else{
+      ETA[j,k] = as.numeric(-alpha_iv * UK_70[k,"s_j"] * UK_70[k,"eurpr"])
+  }
+  }
+}
+formatC(ETA, digits = 4) %>% as.tibble
+```
+
+The results does not make sense, in the matter that the cross elasticity of a product doe's not differ across products, just uppon prices.
+
+# Part 2 - Using a RCM
+
+## 1. Specifying a Model
+
+Again, we are in a world where consumers $i$ from car $j$ in market $t$ is specified by
+
+$$
+u_{jti} = \delta_{jt} +\mu_{ijt} 
+$$
+
+Where $$
+\delta_{jt} = \beta x_{jt} + \alpha p_{jt}  +\xi_{jt}
+$$
+
+And
+
+$$
+\mu_{ijt} = \sum_{l= 1}^k{\sigma_lv_{il}x_{jl}} +\sigma_pv_{ip}p_j 
+$$
+
+For simplicity, I will assume that only two characteristics have random coefficients: price and fuel efficacy.
+
+so define:
+
+```{r}
+x <- c("eurpr","li")
+df <- df %>% filter(xexr<exp(7))
+
+```
+
+note that from now on, price will no longer be noted as $p$ , but as one of the $x_j$s
+
+## 2. Simulating consumers
+
+let $\nu_i$ be consumers $i$ vector of idiosynchronic preferences, so $\nu_i$ is a K x 1 vector.
+
+If we have $ns$ consumer, we can arrange all in a $k$ x $ns$ matrix, call it $\nu$
+
+```{r}
+ns <- 15      #setting number of consumers
+
+set.seed(1991)
+
+nu <- cbind(  #set consumers preferences to be from a s.normal disterbution 
+  rnorm(ns),
+  rnorm(ns)
+)
+```
+
+## 3. Contraction Mapping
+
+Let $\sigma =(\sigma_1.....\sigma_k)$ be the vector of the standard deviation of individual prefernces,
+
+and set $\mu$ to be $J$ x $ns$ matrix such that
+
+$$
+\mu_{ij} = \sum_{l= 1}^k{\sigma_lv_{il}x_{jl}}
+$$
+
+we can write:
+
+$$ \mu= X\cdot diag(\sigma) \cdot\nu'
+$$
+
+Where $diag(\sigma)$ is a $k$ x $k$ matrix with the the elements in $\sigma$ on its diagonal, and zero in the off diagonal elements, and $X$ is a $J$ x $k$ matrix of products characteristics.
+
+(note: i divided the price `eurpr` in 1000 to make sure the numbers will be easy to calculate)
+
+```{r}
+sigma <- (c(0.01,0.03)) #vector of individual preferences SD
+x_mat <- df %>%         # products characteristics 
+  select(x) %>%
+  mutate(eurpr=eurpr/1000) %>%
+  as.matrix
+mu_mat <- (x_mat%*%diag(sigma))%*%t(nu) #matrix of individual prefernces 
+colnames(mu_mat) <- paste("u",1:ns,sep = "_") #name the prefernces of consumers i as u_i
+```
+
+#### Calculating $\pi_j$
+
+set initial $\delta_j$ to be the $\Delta ln(s_j)$
+
+```{r}
+df <- df %>% mutate(delta_t =  dln_s)
+```
+
+for each product $j$, consumer $i$ calculate $u_{ij} = exp(delta_j +mu_ij)$
+
+```{r}
+df <- df %>% cbind(mu_mat) # binding the mues with products data
+df <- df %>%
+  mutate_at(vars(starts_with("u_")),~.+delta_t) # adding mu with delta 
+df <- df %>%
+  mutate_at(vars(starts_with("u_")),~exp(.)) #rising in the exponenet
+```
+
+for each consumer $i$, $pr_i(j|x,\sigma,\delta) = \pi_{ij} = \frac{exp(delta_j +mu_ij)}{1+ \sum_{j=1}^J exp(delta_j +mu_ij)}$ where $J$ is the numbers of products in the *market.*
+
+I will calculate the nominator and denominator separately
+
+denominator:
+
+```{r}
+mkt_denuminator <- df %>%           #calculate denominator by market
+  select(starts_with("u_"),mkt) %>%
+  group_by(mkt) %>%
+  summarise_at(vars(starts_with("u_")),~sum(.)) %>%
+  mutate_at(vars(-mkt),~.+1)
+
+cnam <- colnames(mkt_denuminator)
+
+
+denuminator <- df %>%          # products denominator
+  select(mkt,starts_with("u_")) %>% 
+  inner_join(mkt_denuminator,
+            by = "mkt") %>% select(-contains(".x")) 
+colnames(denuminator) <-cnam
+denuminator <- denuminator %>% select(-mkt)
+```
+
+nominator:
+
+```{r}
+numinator <- df %>% select(starts_with("u_"))
+```
+
+calculate $\pi_{ji}$
+
+```{r}
+pi_ij <- numinator/denuminator
+```
+
+#### Iterating for $\delta$
+
+calculating $\pi_j = \frac{1}{ns} \sum_{i=1}^{ns} \pi_{ij} = \frac{1}{ns} \sum_{i=1}^{ns}\frac{exp(delta_j +mu_ij)}{1+ \sum_{j=1}^J exp(delta_j +mu_ij)}$
+
+```{r}
+pi_j <- pi_ij %>% rowMeans() %>% tibble
+```
+
+setting $\delta^1 = \delta^0 +ln(s_j) -ln(\pi_j)$
+
+```{r}
+df <- df %>% mutate(delta_t1= delta_t +log(s_j) -log(pi_j))
+```
+
+repeating this process until $||\delta^{t+1} - \delta^{t}|| < tol$
+
+```{r}
+
+tol <- exp(-19)
+dif <- norm(as.matrix(df$delta_t)-as.matrix(df$delta_t1))
+
+while (dif>tol) {
+  
+df$delta_t <- df$delta_t1
+df <- df %>% select(-starts_with("u_"))
+df <- df %>% cbind(mu_mat)
+df <- df %>% mutate_at(vars(starts_with("u_")),~.+delta_t)
+df <- df %>% mutate_at(vars(starts_with("u_")),~exp(.))
+denuminator <- df %>%
+  select(starts_with("u_"),mkt) %>%
+  group_by(mkt) %>%
+  summarise_at(vars(starts_with("u_")),~sum(.)) %>% mutate_at(vars(-mkt),~.+1)
+cnam <- colnames(denuminator)
+
+denuminator <- df %>% select(mkt,starts_with("u_")) %>% 
+  inner_join(denuminator,
+             by = "mkt") %>% select(-contains(".x"))
+colnames(denuminator) <-cnam
+
+denuminator <- denuminator %>% select(-mkt)
+numinator <- df %>% select(starts_with("u_"))
+pi_ij <- numinator/denuminator
+pi_j <- pi_ij %>% rowMeans() %>% tibble
+df <- df %>% mutate(delta_t1= delta_t +log(s_j) -log(pi_j))
+dif <- norm(as.matrix(df$delta_t)-as.matrix(df$delta_t1))
+}
+ 
+```
+
+#### A function for $\delta(\sigma)$
+
+Since we want to repeat this process over and over, this is a short function that provide $\delta(\sigma)$ for every given $\sigma$.
+
+```{r class.source = "fold-hide"}
+constract_mapping <- function(sigma) {
+  #cleaning previuos tries
+    df <- df %>% select(-contains("u_i"))
+
+  #calculating mu
+  
+  mu_mat <- (x_mat%*%diag(sigma))%*%t(nu) #matrix of individual prefernces 
+  colnames(mu_mat) <- paste("u",1:ns,sep = "_") #name the prefernces of consumers i                                                 as u_i
+  
+  # setting initial delta
+  df <- df %>% mutate(delta_t =  dln_s)
+  
+  #setting diff = 1 for first run
+  dif <- 1
+  
+  #iterating intol dif < tol
+  while (dif >tol ){
+    #cleaning previuos tries
+    df <- df %>% select(-contains("u_"))
+    #calculating prefernaces
+    df <- df %>% cbind(mu_mat) # binding the mues with products data
+    df <- df %>%
+      mutate_at(vars(starts_with("u_")),~.+delta_t) # adding mu with delta 
+    df <- df %>%
+      mutate_at(vars(starts_with("u_")),~exp(.)) #rising in the exponenet
+    
+    #denominator
+    mkt_denuminator <- df %>%           #calculate denominator by market
+      select(starts_with("u_"),mkt) %>%
+      group_by(mkt) %>%
+      summarise_at(vars(starts_with("u_")),~sum(.)) %>%
+      mutate_at(vars(-mkt),~.+1)
+    
+    cnam <- colnames(mkt_denuminator)
+    
+    denuminator <- df %>%          # products denominator
+      select(mkt,starts_with("u_")) %>% 
+      inner_join(mkt_denuminator,
+                by = "mkt") %>% select(-contains(".x")) 
+    
+    colnames(denuminator) <-cnam
+    denuminator <- denuminator %>% select(-mkt)
+    
+    #nominator
+    numinator <- df %>% select(starts_with("u_"))
+    
+    #pi_il
+    pi_ij <- numinator/denuminator
+    
+    #pi_j
+    pi_j <- pi_ij %>% rowMeans() %>% tibble
+    
+    #delta_t+1
+    df <- df %>% mutate(delta_t1= delta_t +log(s_j) -log(pi_j))
+    
+    #dif = ||delta_t+1 - delta_t||
+    dif <- norm(as.matrix(df$delta_t)-as.matrix(df$delta_t1))
+    df$delta_t <- df$delta_t1
+  }
+  return(df$delta_t)
+}
+```
+
+## 4. GMM Objective function
+
+For every value of $\theta = (\alpha, \beta,\sigma)$ we can calculate $\xi(\theta) \equiv \delta(\sigma) - \alpha p - \beta x$
+
+note: since assign `eurpr` as part of `x_mat` , $\alpha$ is one of the elements in $\beta$, and I use only `beta`
+
+```{r}
+df$delta <- constract_mapping(sigma)
+beta <- c(0.2,0.3)
+df <- df %>% 
+  mutate(xi = delta - x_mat%*%beta)
+df$xi
+```
+
+### 4.1 Instruments
+
+let $z_j= (z_{j1}....z_{jL})'$ be a vector of instruments. go for the *just identify* case, set $L = dim(\theta) = 4$
+
+So, we need 4 instruments. choose:
+
+-   Tax levels
+
+-   The exchange rate
+
+-   The number of competitors product in the market.
+
+-   "producer price index" (`avppr)`
+
+*note:* I didn't compute number of competitors in the previous section, so I'll compute it now:
+
+```{r class.source = "fold-hide" }
+ df <- df %>%
+  group_by(mkt) %>% 
+  mutate(comp = n()/100) %>% ungroup
+```
+
+```{r}
+z <- c("comp","tax","xexr","avppr")
+z_mat <- df %>% select(z) %>% mutate(avppr = avppr/100,
+                                     xexr = xexr/100,
+                                     tax = tax/10) %>% as.matrix 
+```
+
+### 4.2 GMM estimator
+
+We are looking for $\hat{\theta}^{MM}$ s.t.
+
+$$
+E[\xi_j(\hat{\theta}^{_{MM}})z_j] = 0
+$$
+
+First, we look for the parts of $\theta$ that enters GMM function linearly, meaning the parts that are not $\sigma$.
+
+$$
+\bar{\theta}^{_{mm}}(\sigma) \equiv (\sigma,\beta(\sigma)) \\
+ s.t. 
+\\ \beta (\sigma) \equiv argmin_{\{\beta\}}|| E[\xi_j(\sigma,\beta)z_j]||
+$$
+
+The function `objectiv1` calculates $|| E[\xi_j(\sigma,\beta)z_j]||$ for a given combination of $(\delta(\sigma),\beta)$.
+
+```{r}
+objectiv1 <- function(beta) {
+  xi <- delta - x_mat%*%beta              # this is vector xi_j
+  xi_mat <- cbind(xi,xi,xi,xi) %>%         #vector xi_j is turned into matrix (3 identical vectors) for the multipicaton
+    as.matrix
+  expec <- colMeans(xi_mat*z_mat,na.rm=TRUE) %>% as.matrix  #this is E[xi_j * z_j]
+  expec_norm <- norm(expec)                     # this is ||E[xi_j * z_j]||
+  return(expec_norm)
+}
+```
+
+By minimizing it over $\beta$ we get $\beta(\sigma)$, and this is done using the built-in `optim` function.
+
+The function `objective2` does exactly that, and for each $\sigma$ it calculates $\delta(\sigma)$. and stores $\beta(\sigma)$ in `beta_hat`, it also returns the minimized value of $|| E[\xi_j(\sigma,\beta)z_j]||$, so we can minimize it over different values of $\sigma$
+
+Since the first dimension of $beta$ is the mean coefficient of price in the utility function ($\alpha$), it is constrained to be non-negativ.
+
+```{r}
+objective2 <- function(sigma) {
+  delta <<- constract_mapping(sigma) %>% # calculates delta using constract mapping
+    as.matrix                            # using <<- for glbal assigment
+  
+  opt <- optim(
+    c(0,0),
+    objectiv1,
+    upper = c(0,Inf)
+    )
+  
+  beta_hat <<- opt$par
+  return(opt$value)
+}
+
+```
+
+This is how it's looks for some arbitrary $\sigma$
+
+```{r}
+resid <- objective2(sigma)
+paste("The best beta for sigma = (", sigma[1],",",sigma[2], ") is: (", beta_hat[1],",",beta_hat[2],")",sep = "")
+
+```
+
+The next codeblock optimizes over $\sigma$, and for efficiency considerations I blocked it s.t. $\sigma \in [0,1]^2$
+
+```{r}
+opt_par <- optim(sigma,objective2,
+                 upper = c(1,1),
+                 lower = c(0,0),
+                 control=c(
+                   reltol = 1e3,
+                   maxit=20)    # stops afrer 20 iterations
+)
+sigma_hat <- opt_par$par
+theta_gmm <- c(beta_hat,sigma_hat)
+```
+
+### 4.3 GMM Standard Errors
+
+For the just - identify case:
+
+$$
+V(\hat{\theta}^{_{GMM}} - \theta) = 
+$$
