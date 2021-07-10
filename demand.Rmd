@@ -91,7 +91,8 @@ pacman::p_load(
   broom,
   AER,
   miceadds,
-  estimatr
+  estimatr,
+  rootSolve
 )
 ```
 
@@ -307,7 +308,7 @@ so define:
 
 ```{r}
 x <- c("eurpr","li")
-df <- df %>% filter(xexr<exp(7))
+df <- df %>% filter(xexr<exp(7)) #filtering observations with very high exchange rate, O/W cause GMM estimator explodes
 
 ```
 
@@ -320,7 +321,7 @@ let $\nu_i$ be consumers $i$ vector of idiosynchronic preferences, so $\nu_i$ is
 If we have $ns$ consumer, we can arrange all in a $k$ x $ns$ matrix, call it $\nu$
 
 ```{r}
-ns <- 15      #setting number of consumers
+ns <- 1000      #setting number of consumers
 
 set.seed(1991)
 
@@ -370,6 +371,7 @@ df <- df %>% mutate(delta_t =  dln_s)
 for each product $j$, consumer $i$ calculate $u_{ij} = exp(delta_j +mu_ij)$
 
 ```{r}
+df <- df %>% select(-starts_with("u_"))   # clear previous tries
 df <- df %>% cbind(mu_mat) # binding the mues with products data
 df <- df %>%
   mutate_at(vars(starts_with("u_")),~.+delta_t) # adding mu with delta 
@@ -431,7 +433,7 @@ repeating this process until $||\delta^{t+1} - \delta^{t}|| < tol$
 
 ```{r}
 
-tol <- exp(-19)
+tol <- 1e-3
 dif <- norm(as.matrix(df$delta_t)-as.matrix(df$delta_t1))
 
 while (dif>tol) {
@@ -536,14 +538,6 @@ For every value of $\theta = (\alpha, \beta,\sigma)$ we can calculate $\xi(\thet
 
 note: since assign `eurpr` as part of `x_mat` , $\alpha$ is one of the elements in $\beta$, and I use only `beta`
 
-```{r}
-df$delta <- constract_mapping(sigma)
-beta <- c(0.2,0.3)
-df <- df %>% 
-  mutate(xi = delta - x_mat%*%beta)
-df$xi
-```
-
 ### 4.1 Instruments
 
 let $z_j= (z_{j1}....z_{jL})'$ be a vector of instruments. go for the *just identify* case, set $L = dim(\theta) = 4$
@@ -629,7 +623,7 @@ This is how it's looks for some arbitrary $\sigma$
 
 ```{r}
 resid <- objective2(sigma)
-paste("The best beta for sigma = (", sigma[1],",",sigma[2], ") is: (", beta_hat[1],",",beta_hat[2],")",sep = "")
+paste("The best beta for sigma = (", sigma[1],",",sigma[2], ") is: (", beta_hat[1],",",beta_hat[2],")",sep =  "")
 
 ```
 
@@ -641,16 +635,92 @@ opt_par <- optim(sigma,objective2,
                  lower = c(0,0),
                  control=c(
                    reltol = 1e3,
-                   maxit=20)    # stops afrer 20 iterations
+                   maxit=10)    # stops afrer 10 iterations
 )
 sigma_hat <- opt_par$par
 theta_gmm <- c(beta_hat,sigma_hat)
 ```
 
-### 4.3 GMM Standard Errors
+## 5. GMM Standard Errors
 
 For the just - identify case:
 
 $$
-V(\hat{\theta}^{_{GMM}} - \theta) = 
+\sqrt{J}(\hat{\theta}^{_{GMM}} - \theta) \sim N[0,(D'V^{-1}D)^{-1}) \Rightarrow V(\hat{\theta}^{_{GMM}}) =\frac{1}{J}(D'V^{-1}D)^{-1})
 $$
+
+Where:
+
+$$
+D \equiv \frac{\partial E[\xi_j(\hat{\theta}^{_{GMM}})z_j]}{\partial (\hat{\theta}^{_{GMM}})'} \\ V \equiv E[\xi*j((\hat{\theta}^{{GMM}})z_j)(\xi*j(\hat{\theta}^{{GMM}})z_j)']$
+$$
+
+### 5.1 Estimating $V$
+
+First, remember that for matrix $X$,
+
+$$
+V(X) = E(XX') -E[X]E[X]'  \Rightarrow E(XX') = V(X) +E[X]E[X]'
+$$
+
+```{r}
+  delta_hat <- constract_mapping(sigma_hat)
+  xi <- delta - x_mat%*%beta_hat              # this is vector xi_j
+  xi_mat <- cbind(xi,xi,xi,xi) %>%         #vector xi_j is turned into matrix (4 identical vectors) for the multipicaton
+    as.matrix
+  xizi_mat <- xi_mat * z_mat
+  V = var(xizi_mat, na.rm = TRUE) + colMeans(xizi_mat, na.rm=TRUE)%*%t(colMeans(xizi_mat, na.rm=TRUE))
+  V_invers <- solve(V)
+```
+
+### 5.2 Estimating $D$
+
+Define objective function `objectiv3` that calculates $E[\xi_j(\hat{\theta}^{_{GMM}})z_j]$
+
+```{r}
+objective3 <- function(theta) {
+  sigma <- theta[3:4]
+  delta <- constract_mapping(sigma)
+  beta <- theta[1:2]
+  xi <- delta - x_mat%*%beta              # this is vector xi_j
+  xi_mat <- cbind(xi,xi,xi,xi) %>%         #vector xi_j is turned into matrix (3 identical vectors) for the multipicaton
+    as.matrix
+  expec <- colMeans(xi_mat*z_mat,na.rm=TRUE) %>% as.matrix  #this is E[xi_j * z_j]
+  return(expec)
+}
+```
+
+Estimate the gradient of `objectiv3` using `rootSolve::gradient`
+
+```{r}
+D = gradient(objective3,theta_gmm)
+```
+
+### 5.3 Calculate SE:
+
+The standard errors are the roots of the diagonal elements of the variance matix
+
+```{r}
+J <-nrow(df)
+var_matrix <-
+  (t(D)%*%V_invers%*%D) %>% ## (D'(v)^-1 D)
+  solve()                   ## (    )^-1
+
+var_matrix <- var_matrix/J
+
+se <- diag(var_matrix) %>% sqrt
+```
+
+## 6. Showing estimated parameters
+
+```{r}
+f_tbl <- cbind(
+  par.name = c("alpha","beta","sigma_p","sigma_x"),
+  parametrs = theta_gmm,
+  se = se,
+  "[-95%" = theta_gmm - qnorm(0.975) * se,
+   "+95%]" = theta_gmm +qnorm(0.975) *se
+) %>% as.tibble
+
+f_tbl
+```
